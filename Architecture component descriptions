@@ -1,0 +1,174 @@
+Log Analytics Workspace (LA)
+
+What it is: Centralized telemetry store where logs and metrics are ingested, indexed, and queried using Kusto Query Language (KQL).
+Why it matters: Acts as the single source of truth for your SIEM — all detections, hunting, and dashboards read from LA.
+Key settings: retention days, daily cap, pricing tier, workspace region.
+Pitfalls: Excessive ingestion (unfiltered diagnostics) → big cost. Use Data Collection Rules (DCRs) and field filtering.
+Quick tip: Group related resources into one or few workspaces depending on compliance/egress needs (central workspace for ease; regional for compliance).
+
+Microsoft Sentinel
+
+What it is: Cloud-native SIEM & SOAR on top of Log Analytics that provides analytics, detections, incidents, hunting, and automation.
+Why it matters: Converts alerts into actionable incidents, provides built-in detection content, and integrates SOAR playbooks.
+Key features: Analytics rules (scheduled/ML), Watchlists, Hunting, Workbooks, Incidents, Playbooks (Logic Apps), Content Hub.
+Pitfalls: Over-reliance on out-of-the-box rules without tuning → many false positives.
+Quick tip: Enable Sentinel on an already-created Log Analytics workspace to preserve data locality and retention settings.
+
+Data Connectors & Diagnostic Settings
+
+What they are: Built-in connectors (Azure AD, Activity Log, Azure Firewall, Defender, etc.) and diagnostic settings on resources that forward logs to LA.
+Why it matters: They determine what telemetry reaches your SIEM — high-fidelity telemetry is essential for detection.
+Pitfalls: Missing diagnostic settings on new resources → blind spots.
+Quick tip: Use Azure Policy to enforce diagnostic settings automatically on resource creation.
+
+Azure Monitor Agent (AMA) & Data Collection Rules (DCRs)
+
+What they are: AMA is the agent for collecting logs/metrics from VMs. DCRs control exactly what data (tables/fields) is collected and shipped.
+Why it matters: Better control of what you ingest reduces cost and improves performance.
+Pitfalls: Using legacy agents or broad collection policies increases ingestion and noise.
+Quick tip: Use AMA + DCR to whitelist required event channels and exclude verbose fields.
+
+Normalization & Parsers (Common Schema)
+
+What it is: Mapping vendor-specific fields into Sentinel’s common schemas (CommonSecurityLog, SecurityEvent, etc.) so detections/hunting queries are consistent.
+Why it matters: Normalized logs let you write generic detections and reuse content across sources.
+Pitfalls: Custom or malformed syslog/CEF records require parsing work — missing fields break detections.
+Quick tip: Use built-in connectors for common vendors; write KQL parse/extract functions when needed.
+
+Analytics Rules (Detections) & KQL
+
+What they are: Rules written in KQL that run on ingested logs and create alerts/incidents when suspicious patterns appear.
+Why it matters: The heart of your security detection capability.
+Pitfalls: Overly broad rules generate noise; overly narrow rules miss attacks.
+Quick tip: Start with templates, tune thresholds, and add suppression/threshold logic. Always include TimeGenerated windowing.
+
+Example (anomalous sign-in threshold):
+
+SigninLogs
+| where TimeGenerated > ago(1h)
+| summarize cnt = count() by UserPrincipalName, Location
+| where cnt > 5
+
+UEBA (User & Entity Behavior Analytics)
+
+What it is: ML-driven analytics that establishes baselines for users and entities, surfacing anomalous behaviors (impossible travel, unusual admin actions).
+Why it matters: Detects subtle attacker behaviors that signature rules miss.
+Pitfalls: Needs sufficient historical telemetry to learn baselines; noisy sources reduce signal quality.
+Quick tip: Enable after you have steady streams of identity + activity logs; monitor UEBA alerts and tune.
+
+Playbooks (Logic Apps) — SOAR
+
+What they are: Automated or semi-automated response workflows triggered by incidents (e.g., enrich, create ticket, quarantine resources). Implemented as Azure Logic Apps.
+Why it matters: Speeds response, enforces runbooks, and reduces manual toil.
+Pitfalls: Dangerous side effects if playbooks perform destructive actions automatically.
+Quick tip: Start with enrichment and notifications; add blocking or isolation only after manual approvals or conditional logic.
+
+Common playbook actions: call threat intel APIs, create ServiceNow/Jira tickets, post to Teams, block IP in firewall, disable an account.
+
+Workbooks & Dashboards
+
+What they are: Visualizations and interactive reports built from KQL queries for SOC visibility and executive summaries.
+Why it matters: Drives quick situational awareness during incidents and daily monitoring.
+Pitfalls: Overly complex workbooks that query large data ranges can become slow/costly.
+Quick tip: Pre-aggregate where possible and limit queries’ time ranges.
+
+Incident Management & SOC Process
+
+What it is: The process where alerts are grouped into incidents, triaged, assigned, investigated, remediated, and closed.
+Why it matters: Ensures timely and auditable handling of security events.
+Pitfalls: Poor grouping rules → multiple alerts for the same attack; lack of ownership → slow response.
+Quick tip: Define SLA, incident owner roles, and incident playbooks; configure alert grouping logic.
+
+Threat Intelligence (TI) Integration
+
+What it is: External feeds (IP, domain, file hashes) used to enrich alerts and prioritize incidents.
+Why it matters: Allows quick context (known-malicious) for faster prioritization.
+Pitfalls: Low-quality TI increases false positives.
+Quick tip: Vet TI sources and use scoring/whitelists to prevent unnecessary blocking.
+
+Testing & Validation
+
+What it is: Planned tests to validate ingestion, detection, playbook execution, and UEBA accuracy.
+Why it matters: Confirms the system works end-to-end and reduces surprises during real incidents.
+Common tests: ingest synthetic sign-ins, simulate failed/privileged events, trigger playbooks in test mode.
+Quick tip: Use test users/resources isolated from production for destructive tests (e.g., isolate VM).
+
+Cost & Retention Management
+
+What it is: Policies and controls to manage Log Analytics ingestion and retention costs.
+Why it matters: SIEM spend can balloon quickly; control is required for sustainability.
+Quick tip: Use data filters, daily caps, retention policies by log type, and budget alerts.
+
+Security & Governance
+
+What it is: RBAC policies, managed identities, conditional access, Azure Policy enforcement, and secrets handling for playbooks.
+Why it matters: A SIEM with weak access controls becomes an attack vector.
+Quick tip: Use least-privilege RBAC, store credentials in Key Vault, require MFA for privileged analysts.
+
+Practical deployment notes (step-by-step summary with emphasis on descriptions)
+
+Plan workspace layout & cost — choose central vs regional; set retention & budget. (LA = core store.)
+
+Create Log Analytics workspace — set retention and daily cap. (This is where all telemetry lands.)
+
+Enable Sentinel on that workspace. (Sentinel sits on LA and provides detection/automation.)
+
+Configure diagnostic settings on every Azure resource to send logs to LA. (Diagnostic settings are the plumbing.)
+
+Install AMA on VMs and create DCRs to limit what you collect. (Agent + DCRs = cost control and fidelity.)
+
+Onboard connectors (Azure AD, NSG, Firewall, Storage). (Connectors provide structured telemetry.)
+
+Normalize logs — use parsers or built-in mapping so queries behave consistently. (Normalization = reusable detections.)
+
+Import & tune analytics rules (from Content Hub), then build custom KQL rules. (Detections are your alerts.)
+
+Enable UEBA once identity telemetry is flowing. (UEBA finds subtle anomalies.)
+
+Build playbooks for enrichment & response and test them in safe mode. (Playbooks automate response.)
+
+Create workbooks & hunting queries for SOC workflows. (Workbooks = daily visibility.)
+
+Test end-to-end with synthetic/safe simulations. (Testing proves effectiveness.)
+
+Harden & govern with RBAC, policies, Key Vault, and audit logs. (Security of the SIEM itself is crucial.)
+
+Monitor costs & tune (DCRs, rule optimizations, suppression). (Ops: keep it sustainable.)
+
+Example KQL snippets (useful starters)
+
+Simple heartbeat check:
+
+Heartbeat
+| where TimeGenerated > ago(1h)
+| summarize lastSeen = max(TimeGenerated) by Computer
+| where lastSeen < ago(30m)
+
+
+Repeated failed sign-ins:
+
+SigninLogs
+| where ResultType != 0
+| summarize fails=count() by UserPrincipalName, bin(TimeGenerated, 1h)
+| where fails > 10
+
+
+Suspicious NSG denied traffic spike:
+
+AzureDiagnostics
+| where ResourceType == "NETWORKSECURITYGROUPS" and OperationName == "NetworkSecurityGroupFlowEvent"
+| where Action_s == "Deny"
+| summarize denyCount = count() by SourceIP_s, bin(TimeGenerated, 1h)
+| where denyCount > 50
+
+Common pitfalls & how to avoid them
+
+Too much raw ingestion: Use DCRs and field exclusions.
+
+Relying solely on defaults: Tune templates immediately to your environment.
+
+Auto-remediation without checks: Always include manual approval or conditional checks first.
+
+Lack of governance: Enforce diagnostic settings via Azure Policy and use RBAC.
+
+Poor parsing of 3rd-party logs: Validate mapping to common schemas and create transforms.
