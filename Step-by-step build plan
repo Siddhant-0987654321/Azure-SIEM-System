@@ -1,0 +1,236 @@
+Assumption: you have an Azure subscription and at least Contributor on the relevant resource group(s). I’ll provide portal steps + ARM/CLI where suitable.
+
+1) Plan & design
+
+Decide workspace strategy: single central workspace vs regional workspaces (regulatory, latency, egress cost). (Design guidance: choose by geography/compliance). 
+Microsoft Learn
+
+Define retention and data cap budget (Log Analytics ingestion costs).
+
+Map telemetry sources: VMs, NSG, Storage, Azure AD (SignIn/Audit), Firewalls, App Services, on-prem via VPN/ExpressRoute if needed.
+
+2) Create Log Analytics Workspace
+
+Azure CLI
+
+# variables
+RG="rg-siem"
+LOC="eastus"
+WS="la-siem-prod"
+
+az group create -n $RG -l $LOC
+az monitor log-analytics workspace create -g $RG -n $WS --location $LOC --retention-time 90
+
+
+Portal: Azure → Log Analytics workspaces → Create. Set retention, pricing tier.
+
+(Reference: workspace design & overview). 
+Microsoft Learn
++1
+
+3) Enable Microsoft Sentinel on the workspace
+
+Portal: Microsoft Sentinel → Add → Select the Log Analytics workspace → Enable.
+Or CLI/Azure PowerShell using ARM template from the Sentinel quickstart. (Quickstart docs for exact portal flow.) 
+Microsoft Learn
+
+4) Configure diagnostic settings on Azure resources (to send logs to LA)
+
+For each resource (VMs, Storage Accounts, NSGs, Azure Firewall, Application Gateway, Azure AD) configure Diagnostic settings → Send to Log Analytics → pick workspace.
+
+ARM / az CLI sample (diagnostic setting for an activity log)
+
+az monitor diagnostic-settings create \
+  --name sendToLA \
+  --resource /subscriptions/<sub>/resourceGroups/$RG/providers/Microsoft.Compute/virtualMachines/myVM \
+  --workspace $WS \
+  --logs '[{"category":"Administrative","enabled":true},{"category":"Security","enabled":true}]'
+
+
+Docs: Diagnostic settings and sample templates. 
+Microsoft Learn
++1
+
+5) Onboard data connectors in Sentinel
+
+In Sentinel: Configuration → Data connectors. Use built-in connectors for Azure AD (SignIn/Audit), Activity Log, Azure Firewall, Azure Firewall Manager, Microsoft Defender connectors, Common Event Format (CEF), Syslog for Linux machines, and custom data ingestion if needed. 
+Microsoft Learn
+
+Example: to ingest Azure AD SignIn/Audit logs, go to Microsoft Entra (Azure AD) → Monitoring & health → Diagnostic settings → Send SigninLogs & AuditLogs to the Log Analytics workspace. 
+Azure Documentation
+
+6) Install/enable agents on VMs and on-prem
+
+Use Azure Monitor Agent (AMA) or Log Analytics agent depending on requirements. Configure data collection rules (DCRs) to control what tables and fields to ingest (reduces cost).
+
+For Linux/Windows non-Azure VMs: install the agent and point to workspace.
+
+7) Create parsers / Normalization (if needed)
+
+If using CEF/Syslog from 3rd-party devices, use the built-in connectors or Sentinel solutions to map fields to common schema (CommonSecurityLog etc.). Use Kusto transforms to extract fields if needed.
+
+8) Build analytics rules (detections) using KQL
+
+Start with templates: Sentinel content hub has many built-in detections; import and customize. Then create custom scheduled rules.
+
+Example scheduled analytics rule (simplified KQL)
+
+// Suspicious RDP from new location
+SigninLogs
+| where ResultType == 0 and AuthenticationRequirement == "SingleFactor"
+| where Location != "ExpectedCountry"
+| summarize Count = count() by UserPrincipalName, bin(TimeGenerated, 1h)
+| where Count > 3
+
+
+Create analytics rule → set lookback period, frequency, severity, and incident grouping settings. 
+Microsoft Learn
++1
+
+9) Enable UEBA (Entity Behavior Analytics)
+
+In Sentinel workspace configuration → Entity behavior analytics (UEBA) → Enable. Select directories and entity types to sync. UEBA consumes identity + activity signals and surfaces anomalies like impossible travel, abnormal admin operations, etc. Use UEBA enrichments in investigations. 
+Microsoft Learn
++1
+
+10) Create playbooks (Logic Apps) for automation/response
+
+Use Logic Apps to create playbooks triggered from Sentinel incidents. Common playbook actions: enrich incident with threat intel, create ticket (JIRA/ServiceNow), disable user, isolate VM (via Azure Automation/Runbook), send notifications (Teams/Slack/Email).
+
+Sample playbook outline (pseudo-steps):
+
+Trigger: When an incident is created in Sentinel.
+
+Get incident details.
+
+Enrich: Call external TI API (VirusTotal/OTX).
+
+If severity >= High → Create ServiceNow ticket & add owner.
+
+If IOC present → Block IP in Azure Firewall or create NSG rule (careful with automation scope).
+
+Post results to Teams and update incident status.
+
+Docs: Sentinel playbooks are Logic Apps under the hood. 
+Microsoft Learn
+
+11) Hunting queries & Workbooks
+
+Create hunting queries using KQL; save and pin to workbooks/dashboards for SOC analysts. Use built-in hunting queries as starting points.
+
+Example hunting KQL (rare admin on non-admin host)
+
+Heartbeat
+| where TimeGenerated > ago(24h)
+| join kind=leftouter (
+    SecurityEvent
+    | where EventID == 4672 // privileged escalation
+) on Computer
+| where isnull(SecurityEvent.Computer)
+
+12) Triage & Incident Management
+
+Configure incident settings: grouping rules, alert-to-incident mappings.
+
+Define playbooks to auto-enrich but do not auto-close incidents without human review.
+
+Assign owners and SLAs inside the SOC process.
+
+13) Test & Validate
+
+Use benign test events: create test sign-ins, simulate suspicious actions, generate custom logs to confirm ingestion and analytic rule firing.
+
+Validate playbooks: run in "manual"/test mode first.
+
+Validate UEBA: confirm user/entity sync and that anomalies appear for crafted behaviors.
+
+14) Monitoring, logging & optimization
+
+Monitor ingestion and query costs. Use data collection rules to filter unnecessary fields and tables. Use workspace design patterns (regional/central) to optimize egress and compliance. 
+Microsoft Learn
++1
+
+Tune analytics rule thresholds: reduce false positives by refining queries, lookback, and suppression logic.
+
+Periodically review detections and update hunting queries.
+
+15) Hardening & governance
+
+Use RBAC for Sentinel and workspace (least privilege).
+
+Enable Azure Policy to ensure diagnostic settings are present on new resources.
+
+Secure Logic Apps and playbooks (managed identity, service principals) and restrict who can run playbooks.
+
+Example ARM snippets & KQL (short)
+
+ARM snippet: create diagnostic setting (JSON snippet simplified)
+
+{
+  "type": "Microsoft.Insights/diagnosticSettings",
+  "apiVersion": "2021-05-01-preview",
+  "name": "sendToLA",
+  "properties": {
+    "workspaceId": "/subscriptions/<sub>/resourceGroups/rg-siem/providers/Microsoft.OperationalInsights/workspaces/la-siem-prod",
+    "logs": [
+      { "category": "AuditEvent", "enabled": true },
+      { "category": "SignInLogs", "enabled": true }
+    ]
+  }
+}
+
+
+(Use diagnostic-settings docs for correct categories per resource). 
+Microsoft Learn
+
+KQL: simple anomalous sign-in alert
+
+SigninLogs
+| where TimeGenerated > ago(1h)
+| summarize cnt = count() by UserPrincipalName, Location = Location
+| where cnt > 5
+
+Testing checklist (quick)
+
+ Ingested test logs visible in LA (Run SigninLogs | take 10).
+
+ Analytics rule triggers an incident for crafted test event.
+
+ Playbook executes and creates a ticket/notification.
+
+ UEBA anomalies appear for staged anomalous behavior.
+
+ Verify role separation: only analysts can close incidents.
+
+ Cost alert: set budget alerts for Log Analytics ingestion.
+
+Operational tips & best practices
+
+Use Data Collection Rules (DCR) to minimize unnecessary ingestion (saves cost). 
+Microsoft Learn
+
+Start with built-in rule templates and tune to reduce FP noise. 
+Microsoft Learn
+
+Keep playbook actions idempotent and avoid destructive automation without manual approval. 
+Microsoft Learn
+
+Enable UEBA after sufficient identity telemetry is available; it needs warm-up to learn baselines. 
+Microsoft Learn
++1
+
+Sources / docs I used for this plan
+
+Azure Monitor / Log Analytics workspace design. 
+Microsoft Learn
+
+Microsoft Sentinel quickstart / onboarding. 
+Microsoft Learn
+
+Create scheduled analytics rules (Sentinel). 
+Microsoft Learn
+
+Sentinel playbooks (Logic Apps). 
+Microsoft Learn
+
+UEBA / Entity Behavior Analytics reference & enablement.
