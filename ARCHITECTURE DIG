@@ -1,0 +1,25 @@
+                              +---------------------------+
+                              |      Azure Portal / SIEM  |
+                              |  (Sentinel / Workbooks /  |
+                              |   Incidents / Hunting)    |
+                              +-------------+-------------+
+                                            |
+                +---------------------------+---------------------------+
+                |                           |                           |
++---------------v---------------+  +--------v--------+         +--------v--------+
+| Log Analytics Workspace (LA)  |  |  Analytics Rules |         |  Automation     |
+| - Central log store (tables)  |  |  (Scheduled, ML) |         |  (Playbooks via |
+| - Retention + data caps       |  |  -> Incidents    |         |   Logic Apps)   |
++---------------+---------------+  +--------+--------+         +--------+--------+
+                |                             |                          |
+   +------------+------------+      +---------+---------+      +---------+---------+
+   |                         |      |                   |      |                   |
+   |   Ingestors / Agents    |      |   Threat Intel    |      |  SOAR Integrations|
+   | - Azure Monitor (Diag)  |      |   (TI feeds,MS)   |      |  (Ticketing,Slack)|
+   | - Azure Monitor Agent   |      |                   |      |                   |
+   +-----+----+----+----+----+      +-------------------+      +-------------------+
+         |    |    |    |
+         |    |    |    +--> Identity logs (Azure AD / Entra)  <-- NSG,Firewall logs
+         |    |    +------> VM & Syslog (Linux/Windows) agents
+         |    +---------> Storage / App Service diagnostics
+         +-----------> NSG flow logs, Azure Firewall, Load Balancer
